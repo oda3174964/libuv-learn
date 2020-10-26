@@ -30,15 +30,15 @@
 #define MAX_THREADPOOL_SIZE 1024
 
 static uv_once_t once = UV_ONCE_INIT;
-static uv_cond_t cond;
-static uv_mutex_t mutex;
+static uv_cond_t cond; // 条件变量
+static uv_mutex_t mutex; // 互斥锁
 static unsigned int idle_threads;
 static unsigned int slow_io_work_running;
 static unsigned int nthreads;
 static uv_thread_t* threads;
 static uv_thread_t default_threads[4];
 static QUEUE exit_message;
-static QUEUE wq;
+static QUEUE wq;// 任务队列
 static QUEUE run_slow_work_message;
 static QUEUE slow_io_pending_wq;
 
@@ -62,7 +62,10 @@ static void worker(void* arg) {
   uv_sem_post((uv_sem_t*) arg);
   arg = NULL;
 
+  // 获取互斥锁
   uv_mutex_lock(&mutex);
+
+  // 通过无限循环，保证线程一直执行
   for (;;) {
     /* `mutex` should always be locked at this point. */
 
@@ -73,10 +76,13 @@ static void worker(void* arg) {
             QUEUE_NEXT(&run_slow_work_message) == &wq &&
             slow_io_work_running >= slow_work_thread_threshold())) {
       idle_threads += 1;
+	  // 如果任务队列为空，通过等待条件变量cond挂起，并释放锁mutex
+      // 主线程提交任务通过uv_cond_signal唤起，并重新获取锁mutex
       uv_cond_wait(&cond, &mutex);
       idle_threads -= 1;
     }
 
+	// 从任务队列中获取第一个任务
     q = QUEUE_HEAD(&wq);
     if (q == &exit_message) {
       uv_cond_signal(&cond);
@@ -84,6 +90,7 @@ static void worker(void* arg) {
       break;
     }
 
+	// 将该任务从任务队列中删除
     QUEUE_REMOVE(q);
     QUEUE_INIT(q);  /* Signal uv_cancel() that the work req is executing. */
 
@@ -116,20 +123,27 @@ static void worker(void* arg) {
       }
     }
 
+	// 操作完任务队列，释放锁mutex
     uv_mutex_unlock(&mutex);
 
+	// 获取uv__work对象，并执行work
     w = QUEUE_DATA(q, struct uv__work, wq);
     w->work(w);
 
+	// 获取loop的互斥锁wq_mutex
     uv_mutex_lock(&w->loop->wq_mutex);
     w->work = NULL;  /* Signal uv_cancel() that the work req is done
                         executing. */
+
+	// 将执行完work函数的任务挂到loop->wq队列中
     QUEUE_INSERT_TAIL(&w->loop->wq, &w->wq);
+	// 通过uv_async_send通知主线程，当然有任务执行完了，主线程可以执行任务中的done函数。
     uv_async_send(&w->loop->wq_async);
     uv_mutex_unlock(&w->loop->wq_mutex);
 
     /* Lock `mutex` since that is expected at the start of the next
      * iteration. */
+     // 获取锁，执行任务队列中的下一个任务
     uv_mutex_lock(&mutex);
     if (is_slow_work) {
       /* `slow_io_work_running` is protected by `mutex`. */
@@ -140,10 +154,10 @@ static void worker(void* arg) {
 
 
 static void post(QUEUE* q, enum uv__work_kind kind) {
-  uv_mutex_lock(&mutex);
+  uv_mutex_lock(&mutex); // 获取锁
   if (kind == UV__WORK_SLOW_IO) {
     /* Insert into a separate queue. */
-    QUEUE_INSERT_TAIL(&slow_io_pending_wq, q);
+    QUEUE_INSERT_TAIL(&slow_io_pending_wq, q); // 将任务添加到任务队列的最后
     if (!QUEUE_EMPTY(&run_slow_work_message)) {
       /* Running slow I/O tasks is already scheduled => Nothing to do here.
          The worker that runs said other task will schedule this one as well. */
@@ -154,9 +168,9 @@ static void post(QUEUE* q, enum uv__work_kind kind) {
   }
 
   QUEUE_INSERT_TAIL(&wq, q);
-  if (idle_threads > 0)
+  if (idle_threads > 0) // 如果线程池中有挂起的线程，就唤起挂起的线程，让其工作
     uv_cond_signal(&cond);
-  uv_mutex_unlock(&mutex);
+  uv_mutex_unlock(&mutex); // 释放锁
 }
 
 
@@ -190,15 +204,22 @@ static void init_threads(void) {
   const char* val;
   uv_sem_t sem;
 
-  nthreads = ARRAY_SIZE(default_threads);
+  nthreads = ARRAY_SIZE(default_threads); // 计算线程池中线程的数量，不能大于最大值MAX_THREADPOOL_SIZE
+
+  // 通过环境变量设置线程池的大小
   val = getenv("UV_THREADPOOL_SIZE");
   if (val != NULL)
     nthreads = atoi(val);
+
+  // 保存线程池中最少有一个线程
   if (nthreads == 0)
     nthreads = 1;
+
+  // 线程池中线程数量不能超过MAX_THREADPOOL_SIZE
   if (nthreads > MAX_THREADPOOL_SIZE)
     nthreads = MAX_THREADPOOL_SIZE;
 
+  // 初始化线程池
   threads = default_threads;
   if (nthreads > ARRAY_SIZE(default_threads)) {
     threads = uv__malloc(nthreads * sizeof(threads[0]));
@@ -208,12 +229,15 @@ static void init_threads(void) {
     }
   }
 
+  // 创建条件变量
   if (uv_cond_init(&cond))
     abort();
 
+  // 创建互斥量
   if (uv_mutex_init(&mutex))
     abort();
 
+  // 初始化任务队列
   QUEUE_INIT(&wq);
   QUEUE_INIT(&slow_io_pending_wq);
   QUEUE_INIT(&run_slow_work_message);
@@ -221,6 +245,7 @@ static void init_threads(void) {
   if (uv_sem_init(&sem, 0))
     abort();
 
+  // 根据线程池的数量，初始化线程池中的每个线程，并执行worker函数
   for (i = 0; i < nthreads; i++)
     if (uv_thread_create(threads + i, worker, &sem))
       abort();
@@ -258,11 +283,11 @@ void uv__work_submit(uv_loop_t* loop,
                      enum uv__work_kind kind,
                      void (*work)(struct uv__work* w),
                      void (*done)(struct uv__work* w, int status)) {
-  uv_once(&once, init_once);
-  w->loop = loop;
-  w->work = work;
-  w->done = done;
-  post(&w->wq, kind);
+  uv_once(&once, init_once); // 初始化线程，无乱调用多少次，init_once只会执行一次
+  w->loop = loop; // 事件循环
+  w->work = work; // 线程池要执行的函数
+  w->done = done; // 线程池执行结束后，通知主线程要执行的函数
+  post(&w->wq, kind); // 将任务提交任务队列中
 }
 
 

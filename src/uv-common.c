@@ -761,6 +761,7 @@ static uv_loop_t* default_loop_ptr;
 
 
 uv_loop_t* uv_default_loop(void) {
+	//初始化默认的loop对象
   if (default_loop_ptr != NULL)
     return default_loop_ptr;
 
