@@ -391,7 +391,7 @@ int uv_run(uv_loop_t* loop, uv_run_mode mode) {
      */
     uv__metrics_update_idle_time(loop);
 
-    uv__run_check(loop);
+    uv__run_check(loop); //执行check队列
     uv__run_closing_handles(loop);
 
     if (mode == UV_RUN_ONCE) {
@@ -438,7 +438,7 @@ int uv__socket(int domain, int type, int protocol) {
   int err;
 
 #if defined(SOCK_NONBLOCK) && defined(SOCK_CLOEXEC)
-  sockfd = socket(domain, type | SOCK_NONBLOCK | SOCK_CLOEXEC, protocol);
+  sockfd = socket(domain, type | SOCK_NONBLOCK | SOCK_CLOEXEC, protocol); //用fork调用创建子进程时在子进程中关闭该socket,非阻塞socket
   if (sockfd != -1)
     return sockfd;
 

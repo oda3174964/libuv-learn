@@ -429,11 +429,11 @@ struct uv_shutdown_s {
   /* public */                                                                \
   void* data;                                                                 \
   /* read-only */                                                             \
-  uv_loop_t* loop;                                                            \
-  uv_handle_type type;                                                        \
-  /* private */                                                               \
-  uv_close_cb close_cb;                                                       \
-  void* handle_queue[2];                                                      \
+  uv_loop_t* loop;                                                            \  // 所属事件循环  
+  uv_handle_type type;                                                        \  // handle类型
+  /* private */                                                               \  
+  uv_close_cb close_cb;                                                       \  // 关闭handle时的回调
+  void* handle_queue[2];                                                      \  // 用于插入事件循环的handle队列
   union {                                                                     \
     int fd;                                                                   \
     void* reserved[4];                                                        \
@@ -478,9 +478,9 @@ UV_EXTERN uv_buf_t uv_buf_init(char* base, unsigned int len);
 
 #define UV_STREAM_FIELDS                                                      \
   /* number of bytes queued for writing */                                    \
-  size_t write_queue_size;                                                    \
-  uv_alloc_cb alloc_cb;                                                       \
-  uv_read_cb read_cb;                                                         \
+  size_t write_queue_size;                                                    \  // 用户写入流的字节大小，流缓存用户的输入，然后等到可写的时候才做真正的写
+  uv_alloc_cb alloc_cb;                                                       \  // 分配内存的函数，内存由用户定义，主要用来保存读取的数据  
+  uv_read_cb read_cb;                                                         \  // 读取数据的回调 
   /* private */                                                               \
   UV_STREAM_PRIVATE_FIELDS
 

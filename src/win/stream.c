@@ -163,7 +163,7 @@ int uv_write2(uv_write_t* req,
 
   if (handle->type != UV_NAMED_PIPE || !((uv_pipe_t*) handle)->ipc) {
     return UV_EINVAL;
-  } else if (!(handle->flags & UV_HANDLE_WRITABLE)) {
+  } else if (!(handle->flags & UV_HANDLE_WRITABLE)) { // 是不可写流
     return UV_EPIPE;
   }
 

@@ -282,19 +282,19 @@ typedef struct {
   uv_buf_t bufsml[4];                                                         \
 
 #define UV_HANDLE_PRIVATE_FIELDS                                              \
-  uv_handle_t* next_closing;                                                  \
-  unsigned int flags;                                                         \
+  uv_handle_t* next_closing;                                                  \  // 用于插入事件循环的closing阶段对应的队列
+  unsigned int flags;                                                         \  // 标记
 
 #define UV_STREAM_PRIVATE_FIELDS                                              \
-  uv_connect_t *connect_req;                                                  \
-  uv_shutdown_t *shutdown_req;                                                \
-  uv__io_t io_watcher;                                                        \
-  void* write_queue[2];                                                       \
-  void* write_completed_queue[2];                                             \
-  uv_connection_cb connection_cb;                                             \
-  int delayed_error;                                                          \
-  int accepted_fd;                                                            \
-  void* queued_fds;                                                           \
+  uv_connect_t *connect_req;                                                  \  // 连接成功后，执行connect_req的回调（connect_req在uv__xxx_connect中赋值）
+  uv_shutdown_t *shutdown_req;                                                \  // 关闭写端的时候，发送完缓存的数据，执行shutdown_req的回调（shutdown_req在uv_shutdown的时候赋值）
+  uv__io_t io_watcher;                                                        \  // 流对应的io观察者，即文件描述符+一个文件描述符事件触发时执行的回调
+  void* write_queue[2];                                                       \  // 流缓存下来的，待写的数据 
+  void* write_completed_queue[2];                                             \  // 已经完成了数据写入的队列
+  uv_connection_cb connection_cb;                                             \  // 完成三次握手后，执行的回调
+  int delayed_error;                                                          \  // 操作流时出错码
+  int accepted_fd;                                                            \  // accept返回的通信socket对应的文件描述符
+  void* queued_fds;                                                           \  // 同上，用于缓存更多的通信socket对应的文件描述符 
   UV_STREAM_PRIVATE_PLATFORM_FIELDS                                           \
 
 #define UV_TCP_PRIVATE_FIELDS /* empty */

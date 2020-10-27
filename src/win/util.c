@@ -499,6 +499,7 @@ uint64_t uv__hrtime(unsigned int scale) {
 
   assert(hrtime_frequency_ != 0);
   assert(scale != 0);
+  // 获得当前计数
   if (!QueryPerformanceCounter(&counter)) {
     uv_fatal_error(GetLastError(), "QueryPerformanceCounter");
   }
@@ -508,7 +509,7 @@ uint64_t uv__hrtime(unsigned int scale) {
    * performance counter interval, integer math could cause this computation
    * to overflow. Therefore we resort to floating point math.
    */
-  scaled_freq = (double) hrtime_frequency_ / scale;
+  scaled_freq = (double) hrtime_frequency_ / scale; // 返回当前计数所花费的时间 默认为秒scale(1000)转换为毫秒
   result = (double) counter.QuadPart / scaled_freq;
   return (uint64_t) result;
 }

@@ -87,7 +87,7 @@ void uv__stream_init(uv_loop_t* loop,
                      uv_handle_type type) {
   int err;
 
-  uv__handle_init(loop, (uv_handle_t*)stream, type);
+  uv__handle_init(loop, (uv_handle_t*)stream, type); //先初始化handle
   stream->read_cb = NULL;
   stream->alloc_cb = NULL;
   stream->close_cb = NULL;
@@ -116,7 +116,7 @@ void uv__stream_init(uv_loop_t* loop,
   stream->select = NULL;
 #endif /* defined(__APPLE_) */
 
-  uv__io_init(&stream->io_watcher, uv__stream_io, -1);
+  uv__io_init(&stream->io_watcher, uv__stream_io, -1);  // 初始化io观察者，把文件描述符（这里还没有，所以是-1）和回调uv__stream_io记录在io_watcher上
 }
 
 
@@ -403,11 +403,13 @@ failed_malloc:
 #endif /* defined(__APPLE__) */
 
 
+// 关闭nagle，开启长连接，保存fd
 int uv__stream_open(uv_stream_t* stream, int fd, int flags) {
 #if defined(__APPLE__)
   int enable;
 #endif
 
+  // 还没有设置fd或者设置的同一个fd则继续，否则返回busy
   if (!(stream->io_watcher.fd == -1 || stream->io_watcher.fd == fd))
     return UV_EBUSY;
 
@@ -415,10 +417,12 @@ int uv__stream_open(uv_stream_t* stream, int fd, int flags) {
   stream->flags |= flags;
 
   if (stream->type == UV_TCP) {
+  	// 关闭nagle算法
     if ((stream->flags & UV_HANDLE_TCP_NODELAY) && uv__tcp_nodelay(fd, 1))
       return UV__ERR(errno);
 
     /* TODO Use delay the user passed in. */
+	/ 开启SO_KEEPALIVE，使用tcp长连接，一定时间后没有收到数据包会发送心跳包
     if ((stream->flags & UV_HANDLE_TCP_KEEPALIVE) &&
         uv__tcp_keepalive(fd, 1, 60)) {
       return UV__ERR(errno);
@@ -434,6 +438,7 @@ int uv__stream_open(uv_stream_t* stream, int fd, int flags) {
   }
 #endif
 
+	// 保存socket对应的文件描述符到io观察者中，libuv会在io poll阶段监听该文件描述符
   stream->io_watcher.fd = fd;
 
   return 0;
@@ -772,6 +777,10 @@ static void uv__write_req_finish(uv_write_t* req) {
    * to revisit in future revisions of the libuv API.
    */
   if (req->error == 0) {
+  	/*
+      bufsml是默认的buf数，如果不够，则bufs指向新的内存，
+      然后再储存数据。两者不等说明申请了额外的内存，需要free掉
+    */
     if (req->bufs != req->bufsml)
       uv__free(req->bufs);
     req->bufs = NULL;
@@ -780,6 +789,7 @@ static void uv__write_req_finish(uv_write_t* req) {
   /* Add it to the write_completed_queue where it will have its
    * callback called in the near future.
    */
+   // 插入写完成队列
   QUEUE_INSERT_TAIL(&stream->write_completed_queue, &req->queue);
   uv__io_feed(stream->loop, &stream->io_watcher);
 }
@@ -812,9 +822,11 @@ start:
 
   assert(uv__stream_fd(stream) >= 0);
 
+  // 待写队列为空，没得写
   if (QUEUE_EMPTY(&stream->write_queue))
     return;
 
+  // 遍历待写队列，把每个节点的数据写入底层
   q = QUEUE_HEAD(&stream->write_queue);
   req = QUEUE_DATA(q, uv_write_t, queue);
   assert(req->handle == stream);
@@ -823,13 +835,24 @@ start:
    * Cast to iovec. We had to have our own uv_buf_t instead of iovec
    * because Windows's WSABUF is not an iovec.
    */
+   /*
+    struct iovec {
+        ptr_t iov_base; // 数据首地址
+        size_t iov_len; // 数据长度
+    };  
+    iovec和bufs结构体的定义一样
+  */
   assert(sizeof(uv_buf_t) == sizeof(struct iovec));
+  // 转成iovec格式发送
   iov = (struct iovec*) &(req->bufs[req->write_index]);
+  // 待写的buf个数，nbufs是总数，write_index是当前已写的个数
   iovcnt = req->nbufs - req->write_index;
 
+	// 最多能写几个
   iovmax = uv__getiovmax();
 
   /* Limit iov count to avoid EINVALs from writev() */
+  // 取最小值
   if (iovcnt > iovmax)
     iovcnt = iovmax;
 
@@ -837,7 +860,7 @@ start:
    * Now do the actual writev. Note that we've been updating the pointers
    * inside the iov each time we write. So there is no need to offset it.
    */
-
+	// 有需要传递的描述符
   if (req->send_handle) {
     int fd_to_send;
     struct msghdr msg;
@@ -907,6 +930,7 @@ start:
     goto start;
 
   /* We're not done. */
+  // 到这说明数据还没有完全被写入，注册等待可写事件，等待继续写
   uv__io_start(stream->loop, &stream->io_watcher, POLLOUT);
 
   /* Notify select() thread about state change */
@@ -915,9 +939,12 @@ start:
   return;
 
 error:
+	// 写出错
   req->error = err;
   uv__write_req_finish(req);
+  // 撤销等待可写事件
   uv__io_stop(stream->loop, &stream->io_watcher, POLLOUT);
+  // 没有注册了等待可读事件，则停掉流
   if (!uv__io_active(&stream->io_watcher, POLLIN))
     uv__handle_stop(stream);
   uv__stream_osx_interrupt_select(stream);
@@ -1407,6 +1434,7 @@ int uv_write2(uv_write_t* req,
   if (uv__stream_fd(stream) < 0)
     return UV_EBADF;
 
+  // 流中缓存的数据大小是否为0
   if (!(stream->flags & UV_HANDLE_WRITABLE))
     return UV_EPIPE;
 
@@ -1436,39 +1464,57 @@ int uv_write2(uv_write_t* req,
    * We could check that write_queue is empty instead but that implies making
    * a write() syscall when we know that the handle is in error mode.
    */
+
+  // 流中缓存的数据大小是否为0
   empty_queue = (stream->write_queue_size == 0);
 
   /* Initialize the req */
+  // 初始化一个写请求
   uv__req_init(stream->loop, req, UV_WRITE);
+  // 写完后执行的回调
   req->cb = cb;
+  // 往哪个流写
   req->handle = stream;
+  // 写出错的错误码，初始化为0
   req->error = 0;
   req->send_handle = send_handle;
   QUEUE_INIT(&req->queue);
 
+  // 默认buf
   req->bufs = req->bufsml;
+  // 不够则扩容
   if (nbufs > ARRAY_SIZE(req->bufsml))
     req->bufs = uv__malloc(nbufs * sizeof(bufs[0]));
 
   if (req->bufs == NULL)
     return UV_ENOMEM;
 
+	// 把需要写入的数据填充到req中
   memcpy(req->bufs, bufs, nbufs * sizeof(bufs[0]));
+  // 需要写入的buf个数
   req->nbufs = nbufs;
+  // 目前写入的buf个数，初始化是0
   req->write_index = 0;
+  // 更新流中待写数据的总长度，就是每个buf的数据大小加起来
   stream->write_queue_size += uv__count_bufs(bufs, nbufs);
 
   /* Append the request to write_queue. */
+  // 插入待写队列
   QUEUE_INSERT_TAIL(&stream->write_queue, &req->queue);
 
   /* If the queue was empty when this function began, we should attempt to
    * do the write immediately. Otherwise start the write_watcher and wait
    * for the fd to become writable.
    */
+   /*
+   stream->connect_req非空说明是作为客户端，并且正在建立三次握手，建立成功会置connect_req为NULL。
+   这里非空说明还没有建立成功或者不是作为客户端（不是连接流）。即没有用到connect_req这个字段。
+  */
   if (stream->connect_req) {
     /* Still connecting, do nothing. */
   }
   else if (empty_queue) {
+  	// 待写队列为空，则直接触发写动作，即操作文件描述符
     uv__write(stream);
   }
   else {
@@ -1477,6 +1523,11 @@ int uv_write2(uv_write_t* req,
      * if this assert fires then somehow the blocking stream isn't being
      * sufficiently flushed in uv__write.
      */
+
+	/*
+        队列非空，说明往底层写，uv__write中不一样会注册等待可写事件，所以这里注册一下
+        给流注册等待可写事件，触发的时候，把数据消费掉
+    */
     assert(!(stream->flags & UV_HANDLE_BLOCKING_WRITES));
     uv__io_start(stream->loop, &stream->io_watcher, POLLOUT);
     uv__stream_osx_interrupt_select(stream);
@@ -1552,21 +1603,29 @@ int uv_try_write(uv_stream_t* stream,
 }
 
 
+/*
+执行uv_read_start本质上是给流对应的文件描述符在epoll中注册了一个可读事件。并且给一些字段赋值，
+比如读回调函数，分配内存的函数。打上正在做读取操作的标记。然后在可读事件触发的时候，
+读回调就会被执行，这个逻辑我们后面分析。除了开始读取数据，还有一个读操作就是停止读取
+*/
 int uv_read_start(uv_stream_t* stream,
                   uv_alloc_cb alloc_cb,
                   uv_read_cb read_cb) {
   assert(stream->type == UV_TCP || stream->type == UV_NAMED_PIPE ||
       stream->type == UV_TTY);
 
+	// 流已经关闭，不能读
   if (stream->flags & UV_HANDLE_CLOSING)
     return UV_EINVAL;
 
+  // 流不可读，说明可能是只写流
   if (!(stream->flags & UV_HANDLE_READABLE))
     return UV_ENOTCONN;
 
   /* The UV_HANDLE_READING flag is irrelevant of the state of the tcp - it just
    * expresses the desired state of the user.
    */
+   // 标记正在读
   stream->flags |= UV_HANDLE_READING;
 
   /* TODO: try to do the read inline? */
@@ -1576,11 +1635,15 @@ int uv_read_start(uv_stream_t* stream,
   assert(uv__stream_fd(stream) >= 0);
   assert(alloc_cb);
 
+  // 记录读回调，有数据的时候会执行这个回调
   stream->read_cb = read_cb;
   stream->alloc_cb = alloc_cb;
 
+	// 注册读事件
   uv__io_start(stream->loop, &stream->io_watcher, POLLIN);
+  // 激活handle，有激活的handle，事件循环不会退出
   uv__handle_start(stream);
+  //针对osx平台进行特殊处理
   uv__stream_osx_interrupt_select(stream);
 
   return 0;
@@ -1591,12 +1654,18 @@ int uv_read_stop(uv_stream_t* stream) {
   if (!(stream->flags & UV_HANDLE_READING))
     return 0;
 
-  stream->flags &= ~UV_HANDLE_READING;
+  stream->flags &= ~UV_HANDLE_READING; //清楚标志
+
+  //撤销 等待读事件
   uv__io_stop(stream->loop, &stream->io_watcher, POLLIN);
+
+  // 对写事件也不感兴趣，停掉handle。允许事件循环退出
   if (!uv__io_active(&stream->io_watcher, POLLOUT))
     uv__handle_stop(stream);
+  //针对osx平台进行特殊处理
   uv__stream_osx_interrupt_select(stream);
 
+	//回调置空
   stream->read_cb = NULL;
   stream->alloc_cb = NULL;
   return 0;

@@ -151,7 +151,9 @@ int uv__next_timeout(const uv_loop_t* loop) {
   if (handle->timeout <= loop->time)
     return 0;
 
-  diff = handle->timeout - loop->time;
+  diff = handle->timeout - loop->time; //handle是最先到期的定时器 然后计算出差值，作为下次一次等待的时间
+
+  //不能大于最大的INT_MAX
   if (diff > INT_MAX)
     diff = INT_MAX;
 

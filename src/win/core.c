@@ -320,7 +320,9 @@ fail_metrics_mutex_init:
 
 
 void uv_update_time(uv_loop_t* loop) {
+	//返回一个时间
   uint64_t new_time = uv__hrtime(1000);
+	//返回的时间必须大于等于当前时间
   assert(new_time >= loop->time);
   loop->time = new_time;
 }
