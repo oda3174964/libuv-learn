@@ -36,28 +36,36 @@ static void uv__once_inner(uv_once_t* guard, void (*callback)(void)) {
   DWORD result;
   HANDLE existing_event, created_event;
 
+  // 创建事件
   created_event = CreateEvent(NULL, 1, 0, NULL);
   if (created_event == 0) {
     /* Could fail in a low-memory situation? */
+  // 创建失败
     uv_fatal_error(GetLastError(), "CreateEvent");
   }
 
+	//多线程互斥，guard->event为空才设置
   existing_event = InterlockedCompareExchangePointer(&guard->event,
                                                      created_event,
                                                      NULL);
 
   if (existing_event == NULL) {
     /* We won the race */
+    // 先初始化的线程 执行回调函数
     callback();
 
+    // 设置事件
     result = SetEvent(created_event);
     assert(result);
+
+	// 设置标志初始化完成
     guard->ran = 1;
 
   } else {
     /* We lost the race. Destroy the event we created and wait for the existing
      * one to become signaled. */
     CloseHandle(created_event);
+	// 等待初始化完毕
     result = WaitForSingleObject(existing_event, INFINITE);
     assert(result == WAIT_OBJECT_0);
   }
@@ -66,10 +74,13 @@ static void uv__once_inner(uv_once_t* guard, void (*callback)(void)) {
 
 void uv_once(uv_once_t* guard, void (*callback)(void)) {
   /* Fast case - avoid WaitForSingleObject. */
+
+  // 如果已经初始化了，直接返回
   if (guard->ran) {
     return;
   }
 
+  // 执行内部初始化
   uv__once_inner(guard, callback);
 }
 
@@ -77,7 +88,7 @@ void uv_once(uv_once_t* guard, void (*callback)(void)) {
 /* Verify that uv_thread_t can be stored in a TLS slot. */
 STATIC_ASSERT(sizeof(uv_thread_t) <= sizeof(void*));
 
-static uv_key_t uv__current_thread_key;
+static uv_key_t uv__current_thread_key;  // 线程本地存储
 static uv_once_t uv__current_thread_init_guard = UV_ONCE_INIT;
 
 
@@ -90,7 +101,7 @@ static void uv__init_current_thread_key(void) {
 struct thread_ctx {
   void (*entry)(void* arg);
   void* arg;
-  uv_thread_t self;
+  uv_thread_t self;  // 线程句柄
 };
 
 
@@ -99,21 +110,21 @@ static UINT __stdcall uv__thread_start(void* arg) {
   struct thread_ctx ctx;
 
   ctx_p = arg;
-  ctx = *ctx_p;
-  uv__free(ctx_p);
+  ctx = *ctx_p; // 保存一份context
+  uv__free(ctx_p); // 线程创建成功了，可以释放内存
 
-  uv_once(&uv__current_thread_init_guard, uv__init_current_thread_key);
-  uv_key_set(&uv__current_thread_key, (void*) ctx.self);
+  uv_once(&uv__current_thread_init_guard, uv__init_current_thread_key); // 初始化TSL
+  uv_key_set(&uv__current_thread_key, (void*) ctx.self);  // 设置值
 
-  ctx.entry(ctx.arg);
+  ctx.entry(ctx.arg);  // 执行用户回调函数
 
   return 0;
 }
 
-
+// 线程创建
 int uv_thread_create(uv_thread_t *tid, void (*entry)(void *arg), void *arg) {
-  uv_thread_options_t params;
-  params.flags = UV_THREAD_NO_FLAGS;
+  uv_thread_options_t params;  // 线程选项
+  params.flags = UV_THREAD_NO_FLAGS;  // 线程标志
   return uv_thread_create_ex(tid, &params, entry, arg);
 }
 
@@ -133,9 +144,9 @@ int uv_thread_create_ex(uv_thread_t* tid,
 
   if (stack_size != 0) {
     GetNativeSystemInfo(&sysinfo);
-    pagesize = (size_t)sysinfo.dwPageSize;
+    pagesize = (size_t)sysinfo.dwPageSize;  // 获取处理器分页大小
     /* Round up to the nearest page boundary. */
-    stack_size = (stack_size + pagesize - 1) &~ (pagesize - 1);
+    stack_size = (stack_size + pagesize - 1) &~ (pagesize - 1); // 线程栈的大小 对齐 分页大小
 
     if ((unsigned)stack_size != stack_size)
       return UV_EINVAL;
@@ -150,20 +161,21 @@ int uv_thread_create_ex(uv_thread_t* tid,
 
   /* Create the thread in suspended state so we have a chance to pass
    * its own creation handle to it */
+  // 创建开启线程
   thread = (HANDLE) _beginthreadex(NULL,
-                                   (unsigned)stack_size,
-                                   uv__thread_start,
-                                   ctx,
-                                   CREATE_SUSPENDED,
+                                   (unsigned)stack_size, // 线程栈大小
+                                   uv__thread_start, // 线程执行函数
+                                   ctx,  // 线程参数
+                                   CREATE_SUSPENDED, // 线程创bai建好后不会运行，需要调用 ResumeThread 使其运行
                                    NULL);
   if (thread == NULL) {
-    err = errno;
-    uv__free(ctx);
+    err = errno; // 创建失败
+    uv__free(ctx); // 释放分配的context
   } else {
     err = 0;
     *tid = thread;
     ctx->self = thread;
-    ResumeThread(thread);
+    ResumeThread(thread); // 启动线程运行
   }
 
   switch (err) {
@@ -180,30 +192,30 @@ int uv_thread_create_ex(uv_thread_t* tid,
   return UV_EIO;
 }
 
-
+// 返回线程的句柄
 uv_thread_t uv_thread_self(void) {
   uv_once(&uv__current_thread_init_guard, uv__init_current_thread_key);
   return (uv_thread_t) uv_key_get(&uv__current_thread_key);
 }
 
-
+// 等待线程结束
 int uv_thread_join(uv_thread_t *tid) {
-  if (WaitForSingleObject(*tid, INFINITE))
+  if (WaitForSingleObject(*tid, INFINITE))  // 等待线程事件，结束的时候会有信号
     return uv_translate_sys_error(GetLastError());
   else {
-    CloseHandle(*tid);
+    CloseHandle(*tid); // 关闭事件对象
     *tid = 0;
-    MemoryBarrier();  /* For feature parity with pthread_join(). */
+    MemoryBarrier();  /* For feature parity with pthread_join(). */ // 可以限制指令重排和内存读写的缓存
     return 0;
   }
 }
 
-
+// 判断两个线程是否相等
 int uv_thread_equal(const uv_thread_t* t1, const uv_thread_t* t2) {
   return *t1 == *t2;
 }
 
-
+// 初始化互斥量
 int uv_mutex_init(uv_mutex_t* mutex) {
   InitializeCriticalSection(mutex);
   return 0;
@@ -214,12 +226,12 @@ int uv_mutex_init_recursive(uv_mutex_t* mutex) {
   return uv_mutex_init(mutex);
 }
 
-
+// 销毁互斥量
 void uv_mutex_destroy(uv_mutex_t* mutex) {
   DeleteCriticalSection(mutex);
 }
 
-
+// 加锁
 void uv_mutex_lock(uv_mutex_t* mutex) {
   EnterCriticalSection(mutex);
 }
@@ -232,12 +244,12 @@ int uv_mutex_trylock(uv_mutex_t* mutex) {
     return UV_EBUSY;
 }
 
-
+// 解锁
 void uv_mutex_unlock(uv_mutex_t* mutex) {
   LeaveCriticalSection(mutex);
 }
 
-
+// 读写锁
 int uv_rwlock_init(uv_rwlock_t* rwlock) {
   /* Initialize the semaphore that acts as the write lock. */
   HANDLE handle = CreateSemaphoreW(NULL, 1, 1, NULL);
@@ -346,7 +358,7 @@ void uv_rwlock_wrunlock(uv_rwlock_t* rwlock) {
     uv_fatal_error(GetLastError(), "ReleaseSemaphore");
 }
 
-
+// 信号量初始化
 int uv_sem_init(uv_sem_t* sem, unsigned int value) {
   *sem = CreateSemaphore(NULL, value, INT_MAX, NULL);
   if (*sem == NULL)
@@ -355,19 +367,19 @@ int uv_sem_init(uv_sem_t* sem, unsigned int value) {
     return 0;
 }
 
-
+// 信号量销毁
 void uv_sem_destroy(uv_sem_t* sem) {
   if (!CloseHandle(*sem))
     abort();
 }
 
-
+// 按指定数量增加指定信号量对象的计数
 void uv_sem_post(uv_sem_t* sem) {
   if (!ReleaseSemaphore(*sem, 1, NULL))
     abort();
 }
 
-
+// 等待获取信号量
 void uv_sem_wait(uv_sem_t* sem) {
   if (WaitForSingleObject(*sem, INFINITE) != WAIT_OBJECT_0)
     abort();
@@ -387,7 +399,10 @@ int uv_sem_trywait(uv_sem_t* sem) {
   return -1; /* Satisfy the compiler. */
 }
 
-
+/*
+条件变量
+需要让线程以原子方式把锁释放并将自己阻塞，直到某一个条件成立为止
+*/
 int uv_cond_init(uv_cond_t* cond) {
   InitializeConditionVariable(&cond->cond_var);
   return 0;
@@ -400,16 +415,17 @@ void uv_cond_destroy(uv_cond_t* cond) {
 }
 
 
+// 唤醒一个等待的线程
 void uv_cond_signal(uv_cond_t* cond) {
   WakeConditionVariable(&cond->cond_var);
 }
 
-
+// 所有等待的线程都被唤醒
 void uv_cond_broadcast(uv_cond_t* cond) {
   WakeAllConditionVariable(&cond->cond_var);
 }
 
-
+// 等待并释放互斥量
 void uv_cond_wait(uv_cond_t* cond, uv_mutex_t* mutex) {
   if (!SleepConditionVariableCS(&cond->cond_var, mutex, INFINITE))
     abort();
@@ -488,7 +504,7 @@ int uv_barrier_wait(uv_barrier_t* barrier) {
 
 
 int uv_key_create(uv_key_t* key) {
-  key->tls_index = TlsAlloc();
+  key->tls_index = TlsAlloc();  // 创建TLS索引
   if (key->tls_index == TLS_OUT_OF_INDEXES)
     return UV_ENOMEM;
   return 0;
@@ -496,7 +512,7 @@ int uv_key_create(uv_key_t* key) {
 
 
 void uv_key_delete(uv_key_t* key) {
-  if (TlsFree(key->tls_index) == FALSE)
+  if (TlsFree(key->tls_index) == FALSE) // 释放TLS索引
     abort();
   key->tls_index = TLS_OUT_OF_INDEXES;
 }
@@ -505,7 +521,7 @@ void uv_key_delete(uv_key_t* key) {
 void* uv_key_get(uv_key_t* key) {
   void* value;
 
-  value = TlsGetValue(key->tls_index);
+  value = TlsGetValue(key->tls_index);  // 根据索引获取指针
   if (value == NULL)
     if (GetLastError() != ERROR_SUCCESS)
       abort();
@@ -515,6 +531,6 @@ void* uv_key_get(uv_key_t* key) {
 
 
 void uv_key_set(uv_key_t* key, void* value) {
-  if (TlsSetValue(key->tls_index, value) == FALSE)
+  if (TlsSetValue(key->tls_index, value) == FALSE)  // 根据索引设置指针
     abort();
 }
