@@ -97,12 +97,12 @@ static void eof_timer_cb(uv_timer_t* timer);
 static void eof_timer_destroy(uv_pipe_t* pipe);
 static void eof_timer_close_cb(uv_handle_t* handle);
 
-
+// 生成管道名
 static void uv_unique_pipe_name(char* ptr, char* name, size_t size) {
   snprintf(name, size, "\\\\?\\pipe\\uv\\%p-%lu", ptr, GetCurrentProcessId());
 }
 
-
+// pipe初始化
 int uv_pipe_init(uv_loop_t* loop, uv_pipe_t* handle, int ipc) {
   uv_stream_init(loop, (uv_stream_t*)handle, UV_NAMED_PIPE);
 
@@ -139,6 +139,7 @@ static HANDLE open_named_pipe(const WCHAR* name, DWORD* duplex_flags) {
    * Assume that we have a duplex pipe first, so attempt to
    * connect with GENERIC_READ | GENERIC_WRITE.
    */
+   // 打开管道
   pipeHandle = CreateFileW(name,
                            GENERIC_READ | GENERIC_WRITE,
                            0,
@@ -158,7 +159,7 @@ static HANDLE open_named_pipe(const WCHAR* name, DWORD* duplex_flags) {
    */
   if (GetLastError() == ERROR_ACCESS_DENIED) {
     pipeHandle = CreateFileW(name,
-                             GENERIC_READ | FILE_WRITE_ATTRIBUTES,
+                             GENERIC_READ | FILE_WRITE_ATTRIBUTES, // 写入文件属性的权利
                              0,
                              NULL,
                              OPEN_EXISTING,
@@ -173,7 +174,7 @@ static HANDLE open_named_pipe(const WCHAR* name, DWORD* duplex_flags) {
 
   if (GetLastError() == ERROR_ACCESS_DENIED) {
     pipeHandle = CreateFileW(name,
-                             GENERIC_WRITE | FILE_READ_ATTRIBUTES,
+                             GENERIC_WRITE | FILE_READ_ATTRIBUTES, // 读取文件属性的权利
                              0,
                              NULL,
                              OPEN_EXISTING,
@@ -193,7 +194,7 @@ static HANDLE open_named_pipe(const WCHAR* name, DWORD* duplex_flags) {
 static void close_pipe(uv_pipe_t* pipe) {
   assert(pipe->u.fd == -1 || pipe->u.fd > 2);
   if (pipe->u.fd == -1)
-    CloseHandle(pipe->handle);
+    CloseHandle(pipe->handle); // 关闭管道句柄
   else
     close(pipe->u.fd);
 
@@ -211,6 +212,7 @@ int uv_stdio_pipe_server(uv_loop_t* loop, uv_pipe_t* handle, DWORD access,
   for (;;) {
     uv_unique_pipe_name(ptr, name, nameSize);
 
+	// 创建管道
     pipeHandle = CreateNamedPipeA(name,
       access | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE | WRITE_DAC,
       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 65536, 65536, 0,
@@ -230,6 +232,7 @@ int uv_stdio_pipe_server(uv_loop_t* loop, uv_pipe_t* handle, DWORD access,
     ptr++;
   }
 
+  // 把管道和完成端口进行绑定
   if (CreateIoCompletionPort(pipeHandle,
                              loop->iocp,
                              (ULONG_PTR)handle,
@@ -238,6 +241,7 @@ int uv_stdio_pipe_server(uv_loop_t* loop, uv_pipe_t* handle, DWORD access,
     goto error;
   }
 
+  // 连接初始化
   uv_pipe_connection_init(handle);
   handle->handle = pipeHandle;
 
@@ -268,6 +272,7 @@ static int uv_set_pipe_handle(uv_loop_t* loop,
   if (handle->handle != INVALID_HANDLE_VALUE)
     return UV_EBUSY;
 
+  // 设置pipe的模式
   if (!SetNamedPipeHandleState(pipeHandle, &mode, NULL, NULL)) {
     err = GetLastError();
     if (err == ERROR_ACCESS_DENIED) {
@@ -295,6 +300,7 @@ static int uv_set_pipe_handle(uv_loop_t* loop,
   }
 
   /* Check if the pipe was created with FILE_FLAG_OVERLAPPED. */
+  // 获取文件信息
   nt_status = pNtQueryInformationFile(pipeHandle,
                                       &io_status,
                                       &mode_info,
@@ -310,6 +316,7 @@ static int uv_set_pipe_handle(uv_loop_t* loop,
     handle->flags |= UV_HANDLE_NON_OVERLAPPED_PIPE;
   } else {
     /* Overlapped pipe.  Try to associate with IOCP. */
+   // 重叠管道，和完成端口绑定
     if (CreateIoCompletionPort(pipeHandle,
                                loop->iocp,
                                (ULONG_PTR) handle,

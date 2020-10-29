@@ -41,6 +41,7 @@ static ULONG CALLBACK uv__system_resume_callback(PVOID Context,
   return 0;
 }
 
+// 注册系统事件，当系统暂停或者恢复是会调用回调函数
 static void uv__register_system_resume_callback(void) {
   _DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS recipient;
   _HPOWERNOTIFY registration_handle;

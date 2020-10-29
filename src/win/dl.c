@@ -24,7 +24,7 @@
 
 static int uv__dlerror(uv_lib_t* lib, const char* filename, DWORD errorno);
 
-
+// 加载动态库
 int uv_dlopen(const char* filename, uv_lib_t* lib) {
   WCHAR filename_w[32768];
 
@@ -62,7 +62,7 @@ void uv_dlclose(uv_lib_t* lib) {
   }
 }
 
-
+// 获取函数地址
 int uv_dlsym(uv_lib_t* lib, const char* name, void** ptr) {
   /* Cast though integer to suppress pedantic warning about forbidden cast. */
   *ptr = (void*)(uintptr_t) GetProcAddress(lib->handle, name);

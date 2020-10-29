@@ -117,9 +117,9 @@ static int uv_tcp_set_socket(uv_loop_t* loop,
   }
 
   if (family == AF_INET6) {
-    non_ifs_lsp = uv_tcp_non_ifs_lsp_ipv6;
+    non_ifs_lsp = uv_tcp_non_ifs_lsp_ipv6; // uv_tcp_non_ifs_lsp_ipv6 = 1表示IPPROTO_IP协议使用真正地操作系统句柄，没有lsp封装
   } else {
-    non_ifs_lsp = uv_tcp_non_ifs_lsp_ipv4;
+    non_ifs_lsp = uv_tcp_non_ifs_lsp_ipv4; // 同理
   }
 
   if (!(handle->flags & UV_HANDLE_EMULATE_IOCP) && !non_ifs_lsp) {
@@ -540,7 +540,8 @@ static void uv_tcp_queue_read(uv_loop_t* loop, uv_tcp_t* handle) {
   }
 
   flags = 0;
-  // 异步接收数据
+  // 异步接收数据，这里只是调用WSARecv，完成端口监控到有数据之后会插入一个请求，真正的接收数据是在uv_process_tcp_read_req里面结束
+  // 只是监控socket是否有数据，buf的内容和长度都是空的
   result = WSARecv(handle->socket,
                    (WSABUF*)&buf,
                    1,

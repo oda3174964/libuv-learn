@@ -80,6 +80,7 @@ int uv__getaddrinfo_translate_error(int sys_err) {
 #define NDIS_IF_MAX_STRING_SIZE IF_MAX_STRING_SIZE
 #endif
 
+// 地址解析
 static void uv__getaddrinfo_work(struct uv__work* w) {
   uv_getaddrinfo_t* req;
   struct addrinfoW* hints;

@@ -27,6 +27,8 @@
 #include "handle-inl.h"
 #include "req-inl.h"
 
+// 实现了线程和主线程的通信
+
 
 void uv_async_endgame(uv_loop_t* loop, uv_async_t* handle) {
   if (handle->flags & UV_HANDLE_CLOSING &&
@@ -36,13 +38,14 @@ void uv_async_endgame(uv_loop_t* loop, uv_async_t* handle) {
   }
 }
 
-
+// 初始化
 int uv_async_init(uv_loop_t* loop, uv_async_t* handle, uv_async_cb async_cb) {
   uv_req_t* req;
 
+  // 初始化handle
   uv__handle_init(loop, (uv_handle_t*) handle, UV_ASYNC);
   handle->async_sent = 0;
-  handle->async_cb = async_cb;
+  handle->async_cb = async_cb; // 回调函数
 
   req = &handle->async_req;
   UV_REQ_INIT(req, UV_WAKEUP);
@@ -53,7 +56,7 @@ int uv_async_init(uv_loop_t* loop, uv_async_t* handle, uv_async_cb async_cb) {
   return 0;
 }
 
-
+// 关闭
 void uv_async_close(uv_loop_t* loop, uv_async_t* handle) {
   if (!((uv_async_t*)handle)->async_sent) {
     uv_want_endgame(loop, (uv_handle_t*) handle);
@@ -76,7 +79,7 @@ int uv_async_send(uv_async_t* handle) {
   assert(!(handle->flags & UV_HANDLE_CLOSING));
 
   if (!uv__atomic_exchange_set(&handle->async_sent)) {
-    POST_COMPLETION_FOR_REQ(loop, &handle->async_req);
+    POST_COMPLETION_FOR_REQ(loop, &handle->async_req); // 通过iocp唤醒执行
   }
 
   return 0;

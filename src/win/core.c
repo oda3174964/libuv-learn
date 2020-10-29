@@ -85,7 +85,7 @@ static int uv__loops_capacity;
 static uv_mutex_t uv__loops_lock;
 
 static void uv__loops_init(void) {
-  uv_mutex_init(&uv__loops_lock);
+  uv_mutex_init(&uv__loops_lock);  // 初始化互斥量
 }
 
 static int uv__loops_add(uv_loop_t* loop) {
@@ -94,6 +94,7 @@ static int uv__loops_add(uv_loop_t* loop) {
 
   uv_mutex_lock(&uv__loops_lock);
 
+  // uv__loops是线程安全的
   if (uv__loops_size == uv__loops_capacity) {
     new_capacity = uv__loops_capacity + UV__LOOPS_CHUNK_SIZE;
     new_loops = uv__realloc(uv__loops, sizeof(uv_loop_t*) * new_capacity);
@@ -159,6 +160,7 @@ loop_removed:
   uv_mutex_unlock(&uv__loops_lock);
 }
 
+// 唤醒所有的loop工作线程
 void uv__wake_all_loops(void) {
   int i;
   uv_loop_t* loop;
@@ -173,6 +175,7 @@ void uv__wake_all_loops(void) {
   uv_mutex_unlock(&uv__loops_lock);
 }
 
+// 初始化libuv
 static void uv_init(void) {
   /* Tell Windows that we will handle critical errors. */
   SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX |
@@ -230,10 +233,12 @@ int uv_loop_init(uv_loop_t* loop) {
   uv__once_init();
 
   /* Create an I/O completion port */
+  // 创建完成端口
   loop->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
   if (loop->iocp == NULL)
     return uv_translate_sys_error(GetLastError());
 
+  // 初始化内部变量
   lfields = (uv__loop_internal_fields_t*) uv__calloc(1, sizeof(*lfields));
   if (lfields == NULL)
     return UV_ENOMEM;
@@ -247,28 +252,31 @@ int uv_loop_init(uv_loop_t* loop) {
    * to zero before calling uv_update_time for the first time.
    */
   loop->time = 0;
+  // 更新时间
   uv_update_time(loop);
 
   QUEUE_INIT(&loop->wq);
   QUEUE_INIT(&loop->handle_queue);
-  loop->active_reqs.count = 0;
-  loop->active_handles = 0;
+  loop->active_reqs.count = 0; // 请求个数
+  loop->active_handles = 0; // 活跃handle个数
 
-  loop->pending_reqs_tail = NULL;
+  loop->pending_reqs_tail = NULL; // pending队列
 
   loop->endgame_handles = NULL;
 
+  // 创建定时器堆
   loop->timer_heap = timer_heap = uv__malloc(sizeof(*timer_heap));
   if (timer_heap == NULL) {
     err = UV_ENOMEM;
     goto fail_timers_alloc;
   }
 
+  // 初始化堆
   heap_init(timer_heap);
 
-  loop->check_handles = NULL;
-  loop->prepare_handles = NULL;
-  loop->idle_handles = NULL;
+  loop->check_handles = NULL; // check队列
+  loop->prepare_handles = NULL; // prepare队列
+  loop->idle_handles = NULL; // idle队列
 
   loop->next_prepare_handle = NULL;
   loop->next_check_handle = NULL;
@@ -276,13 +284,13 @@ int uv_loop_init(uv_loop_t* loop) {
 
   memset(&loop->poll_peer_sockets, 0, sizeof loop->poll_peer_sockets);
 
-  loop->active_tcp_streams = 0;
-  loop->active_udp_streams = 0;
+  loop->active_tcp_streams = 0; // 激活的tcp流个数
+  loop->active_udp_streams = 0; // 激活的udp流个数
 
-  loop->timer_counter = 0;
-  loop->stop_flag = 0;
+  loop->timer_counter = 0; // 定时器个数
+  loop->stop_flag = 0; // 停止标志
 
-  err = uv_mutex_init(&loop->wq_mutex);
+  err = uv_mutex_init(&loop->wq_mutex); // 工作队列互斥量
   if (err)
     goto fail_mutex_init;
 
@@ -293,7 +301,7 @@ int uv_loop_init(uv_loop_t* loop) {
   uv__handle_unref(&loop->wq_async);
   loop->wq_async.flags |= UV_HANDLE_INTERNAL;
 
-  err = uv__loops_add(loop);
+  err = uv__loops_add(loop); // 添加loop到全局变量
   if (err)
     goto fail_async_init;
 
@@ -337,7 +345,7 @@ void uv__loop_close(uv_loop_t* loop) {
   uv__loop_internal_fields_t* lfields;
   size_t i;
 
-  uv__loops_remove(loop);
+  uv__loops_remove(loop); // 移除loop
 
   /* Close the async handle without needing an extra loop iteration.
    * We might have a pending message, but we're just going to destroy the IOCP
@@ -362,7 +370,7 @@ void uv__loop_close(uv_loop_t* loop) {
   uv_mutex_unlock(&loop->wq_mutex);
   uv_mutex_destroy(&loop->wq_mutex);
 
-  uv__free(loop->timer_heap);
+  uv__free(loop->timer_heap); // 释放定时器堆
   loop->timer_heap = NULL;
 
   lfields = uv__get_internal_fields(loop);
@@ -370,7 +378,7 @@ void uv__loop_close(uv_loop_t* loop) {
   uv__free(lfields);
   loop->internal_fields = NULL;
 
-  CloseHandle(loop->iocp);
+  CloseHandle(loop->iocp); // 关闭iocp
 }
 
 
@@ -427,7 +435,7 @@ static void uv__poll_wine(uv_loop_t* loop, DWORD timeout) {
   uint64_t user_timeout;
   int reset_timeout;
 
-  timeout_time = loop->time + timeout;
+  timeout_time = loop->time + timeout; // 计算iocp超时时间
 
   if (uv__get_internal_fields(loop)->flags & UV_METRICS_IDLE_TIME) {
     reset_timeout = 1;
@@ -464,13 +472,13 @@ static void uv__poll_wine(uv_loop_t* loop, DWORD timeout) {
 
     if (overlapped) {
       /* Package was dequeued */
-      req = uv_overlapped_to_req(overlapped);
-      uv_insert_pending_req(loop, req);
+      req = uv_overlapped_to_req(overlapped); // 获取请求
+      uv_insert_pending_req(loop, req); // 插入pending队列
 
       /* Some time might have passed waiting for I/O,
        * so update the loop time here.
        */
-      uv_update_time(loop);
+      uv_update_time(loop); // 更新时间
     } else if (GetLastError() != WAIT_TIMEOUT) {
       /* Serious error */
       uv_fatal_error(GetLastError(), "GetQueuedCompletionStatus");
@@ -545,6 +553,7 @@ static void uv__poll(uv_loop_t* loop, DWORD timeout) {
 
     if (success) {
       for (i = 0; i < count; i++) {
+	  	// 取出队列中的所有数据
         /* Package was dequeued, but see if it is not a empty package
          * meant only to wake us up.
          */
@@ -565,9 +574,11 @@ static void uv__poll(uv_loop_t* loop, DWORD timeout) {
       /* GetQueuedCompletionStatus can occasionally return a little early.
        * Make sure that the desired timeout target time is reached.
        */
+
+	  // 有时候GetQueuedCompletionStatus返回的比传递的时间早一点
       uv_update_time(loop);
       if (timeout_time > loop->time) {
-        timeout = (DWORD)(timeout_time - loop->time);
+        timeout = (DWORD)(timeout_time - loop->time); // 重新计算超时时间
         /* The first call to GetQueuedCompletionStatus should return very
          * close to the target time and the second should reach it, but
          * this is not stated in the documentation. To make sure a busy
@@ -582,7 +593,7 @@ static void uv__poll(uv_loop_t* loop, DWORD timeout) {
   }
 }
 
-
+// 返回loop是否还有活跃时间需要处理
 static int uv__loop_alive(const uv_loop_t* loop) {
   return uv__has_active_handles(loop) ||
          uv__has_active_reqs(loop) ||

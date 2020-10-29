@@ -32,7 +32,7 @@
 
 const unsigned int uv_directory_watcher_buffer_size = 4096;
 
-
+// 注册监控文件目录变化
 static void uv_fs_event_queue_readdirchanges(uv_loop_t* loop,
     uv_fs_event_t* handle) {
   assert(handle->dir_handle != INVALID_HANDLE_VALUE);
@@ -63,6 +63,7 @@ static void uv_fs_event_queue_readdirchanges(uv_loop_t* loop,
   handle->req_pending = 1;
 }
 
+// 拼接相对路径
 static void uv_relative_path(const WCHAR* filename,
                              const WCHAR* dir,
                              WCHAR** relpath) {
@@ -136,7 +137,7 @@ static int uv_split_path(const WCHAR* filename, WCHAR** dir,
   return 0;
 }
 
-
+// 文件事件初始化
 int uv_fs_event_init(uv_loop_t* loop, uv_fs_event_t* handle) {
   uv__handle_init(loop, (uv_handle_t*) handle, UV_FS_EVENT);
   handle->dir_handle = INVALID_HANDLE_VALUE;
@@ -146,7 +147,7 @@ int uv_fs_event_init(uv_loop_t* loop, uv_fs_event_t* handle) {
   handle->short_filew = NULL;
   handle->dirw = NULL;
 
-  UV_REQ_INIT(&handle->req, UV_FS_EVENT_REQ);
+  UV_REQ_INIT(&handle->req, UV_FS_EVENT_REQ); // request初始化
   handle->req.data = handle;
 
   return 0;
@@ -204,6 +205,7 @@ int uv_fs_event_start(uv_fs_event_t* handle,
   is_path_dir = (attr & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
 
   if (is_path_dir) {
+  	// 路径是文件夹
      /* path is a directory, so that's the directory that we will watch. */
 
     /* Convert to long path. */
@@ -215,6 +217,7 @@ int uv_fs_event_start(uv_fs_event_t* handle,
         uv_fatal_error(ERROR_OUTOFMEMORY, "uv__malloc");
       }
 
+	  // 获取长路径
       size = GetLongPathNameW(pathw, long_path, size);
       if (size) {
         long_path[size] = '\0';
@@ -237,6 +240,7 @@ int uv_fs_event_start(uv_fs_event_t* handle,
      */
 
     /* Convert to short path. */
+	// 路径是文件
     short_path_buffer = NULL;
     short_path_buffer_len = GetShortPathNameW(pathw, NULL, 0);
     if (short_path_buffer_len == 0) {
@@ -255,6 +259,7 @@ int uv_fs_event_start(uv_fs_event_t* handle,
 short_path_done:
     short_path = short_path_buffer;
 
+	// 获取文件夹和文件名
     if (uv_split_path(pathw, &dir, &handle->filew) != 0) {
       last_error = GetLastError();
       goto error;
@@ -290,6 +295,7 @@ short_path_done:
     goto error;
   }
 
+  // 文件夹句柄和完成端口绑定
   if (CreateIoCompletionPort(handle->dir_handle,
                              handle->loop->iocp,
                              (ULONG_PTR)handle,
@@ -308,6 +314,7 @@ short_path_done:
   memset(&(handle->req.u.io.overlapped), 0,
          sizeof(handle->req.u.io.overlapped));
 
+  // 监控文件夹
   if (!ReadDirectoryChangesW(handle->dir_handle,
                              handle->buffer,
                              uv_directory_watcher_buffer_size,
@@ -374,7 +381,7 @@ int uv_fs_event_stop(uv_fs_event_t* handle) {
     return 0;
 
   if (handle->dir_handle != INVALID_HANDLE_VALUE) {
-    CloseHandle(handle->dir_handle);
+    CloseHandle(handle->dir_handle); // 关闭目录句柄
     handle->dir_handle = INVALID_HANDLE_VALUE;
   }
 
@@ -403,7 +410,7 @@ int uv_fs_event_stop(uv_fs_event_t* handle) {
   return 0;
 }
 
-
+// 文件名比较
 static int file_info_cmp(WCHAR* str, WCHAR* file_name, size_t file_name_len) {
   size_t str_len;
 
