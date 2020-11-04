@@ -459,7 +459,7 @@ void uv__io_poll(uv_loop_t* loop, int timeout) {
           have_signals = 1;
         } else {
           uv__metrics_update_idle_time(loop);
-          w->cb(loop, w, pe->events);  // cb为uv__stream_io函数
+          w->cb(loop, w, pe->events);
         }
 
         nevents++;

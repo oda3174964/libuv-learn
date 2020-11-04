@@ -146,7 +146,7 @@ static int inet_ntop6(const unsigned char *src, char *dst, size_t size) {
   return 0;
 }
 
-// 地址转换
+
 int uv_inet_pton(int af, const char* src, void* dst) {
   if (src == NULL || dst == NULL)
     return UV_EINVAL;

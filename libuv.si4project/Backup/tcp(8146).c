@@ -27,7 +27,7 @@
 #include <assert.h>
 #include <errno.h>
 
-// 创建新的socket
+
 static int new_socket(uv_tcp_t* handle, int domain, unsigned long flags) {
   struct sockaddr_storage saddr;
   socklen_t slen;
@@ -72,7 +72,7 @@ static int maybe_new_socket(uv_tcp_t* handle, int domain, unsigned long flags) {
     handle->flags |= flags;
     return 0;
   }
-// 当前stream已经关联了socket  
+
   if (uv__stream_fd(handle) != -1) {
 
     if (flags & UV_HANDLE_BOUND) {
@@ -121,7 +121,7 @@ int uv_tcp_init_ex(uv_loop_t* loop, uv_tcp_t* tcp, unsigned int flags) {
 
   if (flags & ~0xFF)
     return UV_EINVAL;
-// 初始化stream字段
+
   uv__stream_init(loop, (uv_stream_t*)tcp, UV_TCP);
 
   /* If anything fails beyond this point we need to remove the handle from
@@ -208,7 +208,7 @@ int uv__tcp_connect(uv_connect_t* req,
                     uv_connect_cb cb) {
   int err;
   int r;
-  // 类型是TCP
+
   assert(handle->type == UV_TCP);
 
   if (handle->connect_req != NULL)
@@ -224,7 +224,6 @@ int uv__tcp_connect(uv_connect_t* req,
 
   do {
     errno = 0;
-	// 连接服务端	
     r = connect(uv__stream_fd(handle), addr, addrlen);
   } while (r == -1 && errno == EINTR);
 
@@ -250,14 +249,12 @@ int uv__tcp_connect(uv_connect_t* req,
       return UV__ERR(errno);
   }
 
-// req初始化
   uv__req_init(handle->loop, req, UV_CONNECT);
   req->cb = cb;
   req->handle = (uv_stream_t*) handle;
   QUEUE_INIT(&req->queue);
   handle->connect_req = req;
 
-// io_watcher添加到watchers
   uv__io_start(handle->loop, &handle->io_watcher, POLLOUT);
 
   if (handle->delayed_error)

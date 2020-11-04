@@ -1,0 +1,5 @@
+---- existing_event Matches (4 in 1 files) ----
+uv__once_inner in thread.c (src\win) :   HANDLE existing_event, created_event;
+uv__once_inner in thread.c (src\win) :   existing_event = InterlockedCompareExchangePointer(&guard->event,
+uv__once_inner in thread.c (src\win) :   if (existing_event == NULL) {
+uv__once_inner in thread.c (src\win) :     result = WaitForSingleObject(existing_event, INFINITE);

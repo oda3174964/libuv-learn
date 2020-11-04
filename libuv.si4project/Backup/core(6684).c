@@ -449,7 +449,7 @@ int uv__socket(int domain, int type, int protocol) {
   sockfd = socket(domain, type, protocol);
   if (sockfd == -1)
     return UV__ERR(errno);
-// 非阻塞socket
+
   err = uv__nonblock(sockfd, 1);
   if (err == 0)
     err = uv__cloexec(sockfd, 1);
@@ -827,7 +827,6 @@ static unsigned int next_power_of_two(unsigned int val) {
   return val;
 }
 
-// 重新分配watchers大小
 static void maybe_resize(uv_loop_t* loop, unsigned int len) {
   uv__io_t** watchers;
   void* fake_watcher_list;
@@ -835,7 +834,6 @@ static void maybe_resize(uv_loop_t* loop, unsigned int len) {
   unsigned int nwatchers;
   unsigned int i;
 
-// nwatchers已经足够了
   if (len <= loop->nwatchers)
     return;
 
@@ -848,9 +846,7 @@ static void maybe_resize(uv_loop_t* loop, unsigned int len) {
     fake_watcher_count = NULL;
   }
 
-//nwatchers为2的指数
   nwatchers = next_power_of_two(len + 2) - 2;
-//分配watchers
   watchers = uv__reallocf(loop->watchers,
                           (nwatchers + 2) * sizeof(loop->watchers[0]));
 
