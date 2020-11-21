@@ -28,43 +28,32 @@
 #include <errno.h>
 
 // 创建新的socket
-/*
-1 获取一个新的 socket fd
-2 把 fd 保存到 handle 里，并根据 flag 进行相关设置
-3 绑定到本机随意的地址（如果设置了该标记的话）
-*/
 static int new_socket(uv_tcp_t* handle, int domain, unsigned long flags) {
   struct sockaddr_storage saddr;
   socklen_t slen;
   int sockfd;
   int err;
 
-  // 获取一个 socket
   err = uv__socket(domain, SOCK_STREAM, 0);
   if (err < 0)
     return err;
-  // 申请的 fd
   sockfd = err;
 
-  // 设置选项和保存 socket 的文件描述符到 io 观察者中
   err = uv__stream_open((uv_stream_t*) handle, sockfd, flags);
   if (err) {
     uv__close(sockfd);
     return err;
   }
 
-  // 设置了需要绑定标记 UV_HANDLE_BOUND
   if (flags & UV_HANDLE_BOUND) {
     /* Bind this new socket to an arbitrary port */
     slen = sizeof(saddr);
     memset(&saddr, 0, sizeof(saddr));
-    // 获取 fd 对应的 socket 信息，比如 ip，端口，可能没有
     if (getsockname(uv__stream_fd(handle), (struct sockaddr*) &saddr, &slen)) {
       uv__close(sockfd);
       return UV__ERR(errno);
     }
 
-    // 绑定到 socket 中，如果没有则绑定到系统随机选择的地址
     if (bind(uv__stream_fd(handle), (struct sockaddr*) &saddr, slen)) {
       uv__close(sockfd);
       return UV__ERR(errno);
@@ -86,13 +75,7 @@ static int maybe_new_socket(uv_tcp_t* handle, int domain, unsigned long flags) {
 // 当前stream已经关联了socket  
   if (uv__stream_fd(handle) != -1) {
 
-    // 该流需要绑定到一个地址
     if (flags & UV_HANDLE_BOUND) {
-
-	/*
-   流是否已经绑定到一个地址了。handle 的 flag 是在 new_socket 里设置的，
-   如果有这个标记说明已经执行过绑定了，直接更新 flags 就行。
-   */
 
       if (handle->flags & UV_HANDLE_BOUND) {
         /* It is already bound to a port. */
@@ -101,14 +84,11 @@ static int maybe_new_socket(uv_tcp_t* handle, int domain, unsigned long flags) {
       }
 
       /* Query to see if tcp socket is bound. */
-	  // 有 socket fd，但是可能还没绑定到一个地址
       slen = sizeof(saddr);
       memset(&saddr, 0, sizeof(saddr));
-	  // 获取 socket 绑定到的地址
       if (getsockname(uv__stream_fd(handle), (struct sockaddr*) &saddr, &slen))
         return UV__ERR(errno);
 
-	  // 绑定过了 socket 地址，则更新 flags 就行
       if ((saddr.ss_family == AF_INET6 &&
           ((struct sockaddr_in6*) &saddr)->sin6_port != 0) ||
           (saddr.ss_family == AF_INET &&
@@ -119,7 +99,6 @@ static int maybe_new_socket(uv_tcp_t* handle, int domain, unsigned long flags) {
       }
 
       /* Bind to arbitrary port */
-      // 没绑定则绑定到随机地址，bind 中实现
       if (bind(uv__stream_fd(handle), (struct sockaddr*) &saddr, slen))
         return UV__ERR(errno);
     }
@@ -232,11 +211,9 @@ int uv__tcp_connect(uv_connect_t* req,
   // 类型是TCP
   assert(handle->type == UV_TCP);
 
-  // 已经发起了 connect 了
   if (handle->connect_req != NULL)
     return UV_EALREADY;  /* FIXME(bnoordhuis) UV_EINVAL or maybe UV_EBUSY. */
 
-  // 申请一个 socket 和绑定一个地址，如果还没有的话
   err = maybe_new_socket(handle,
                          addr->sa_family,
                          UV_HANDLE_READABLE | UV_HANDLE_WRITABLE);
@@ -246,7 +223,6 @@ int uv__tcp_connect(uv_connect_t* req,
   handle->delayed_error = 0;
 
   do {
-  	// 清除全局错误变量的值
     errno = 0;
 	// 连接服务端	
     r = connect(uv__stream_fd(handle), addr, addrlen);
@@ -258,7 +234,6 @@ int uv__tcp_connect(uv_connect_t* req,
    * and actually the tcp three-way handshake is completed.
    */
   if (r == -1 && errno != 0) {
-  	// 三次握手还没有完成
     if (errno == EINPROGRESS)
       ; /* not an error */
     else if (errno == ECONNREFUSED
@@ -270,20 +245,19 @@ int uv__tcp_connect(uv_connect_t* req,
      * next tick to report the error. Solaris and OpenBSD wants to report
      * immediately -- other unixes want to wait.
      */
-     // 对方拒绝建立连接，延迟报错
       handle->delayed_error = UV__ERR(ECONNREFUSED);
     else
-      return UV__ERR(errno); // 直接报错
+      return UV__ERR(errno);
   }
 
-  // req初始化
+// req初始化
   uv__req_init(handle->loop, req, UV_CONNECT);
   req->cb = cb;
   req->handle = (uv_stream_t*) handle;
   QUEUE_INIT(&req->queue);
   handle->connect_req = req;
 
-  // io_watcher添加到watchers
+// io_watcher添加到watchers
   uv__io_start(handle->loop, &handle->io_watcher, POLLOUT);
 
   if (handle->delayed_error)
@@ -364,13 +338,12 @@ int uv_tcp_listen(uv_tcp_t* tcp, int backlog, uv_connection_cb cb) {
     return tcp->delayed_error;
 
   single_accept = uv__load_relaxed(&single_accept_cached);
-  // 是否设置了不连续 accept。默认是连续 accept。
   if (single_accept == -1) {
     const char* val = getenv("UV_TCP_SINGLE_ACCEPT");
     single_accept = (val != NULL && atoi(val) != 0);  /* Off by default. */
     uv__store_relaxed(&single_accept_cached, single_accept);
   }
-  // 设置不连续 accept
+
   if (single_accept)
     tcp->flags |= UV_HANDLE_TCP_SINGLE_ACCEPT;
 
@@ -382,28 +355,18 @@ int uv_tcp_listen(uv_tcp_t* tcp, int backlog, uv_connection_cb cb) {
   */
   flags |= UV_HANDLE_BOUND;
 #endif
-
-  /*
-   可能还没有用于 listen 的 fd，socket 地址等。
-   这里申请一个 socket 和绑定到一个地址（如果调 listen 之前没有调 bind 则绑定
-  到随机地址）
-   */
   err = maybe_new_socket(tcp, AF_INET, flags);
   if (err)
     return err;
 
-  // 设置 fd 为 listen 状态
   if (listen(tcp->io_watcher.fd, backlog))
     return UV__ERR(errno);
 
-  // 建立连接后的业务回调
   tcp->connection_cb = cb;
   tcp->flags |= UV_HANDLE_BOUND;
 
   /* Start listening for connections. */
-  // 有连接到来时的 libuv 层回调
   tcp->io_watcher.cb = uv__server_io;
-  // 注册读事件，等待连接到来
   uv__io_start(tcp->loop, &tcp->io_watcher, POLLIN);
 
   return 0;

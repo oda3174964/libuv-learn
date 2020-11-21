@@ -59,7 +59,6 @@ static void worker(void* arg) {
   QUEUE* q;
   int is_slow_work;
 
-  // 线程启动成功
   uv_sem_post((uv_sem_t*) arg);
   arg = NULL;
 
@@ -68,12 +67,6 @@ static void worker(void* arg) {
 
   // 通过无限循环，保证线程一直执行
   for (;;) {
-	/*
- 	1 队列为空，
-	2 队列不为空，但是队列里只有慢 IO 任务且正在执行的慢 IO 任务个数达到阈值
- 	则空闲线程加一，防止慢 IO 占用过多线程，导致其他快的任务无法得到执行
- 	*/
-  
     /* `mutex` should always be locked at this point. */
 
     /* Keep waiting while either no work is present or only slow I/O
@@ -91,9 +84,7 @@ static void worker(void* arg) {
 
 	// 从任务队列中获取第一个任务
     q = QUEUE_HEAD(&wq);
-	// 如果头结点是退出消息，则结束线程
     if (q == &exit_message) {
-	  // 唤醒其他因为没有任务正阻塞等待任务的线程，告诉他们准备退出
       uv_cond_signal(&cond);
       uv_mutex_unlock(&mutex);
       break;
@@ -101,23 +92,12 @@ static void worker(void* arg) {
 
 	// 将该任务从任务队列中删除
     QUEUE_REMOVE(q);
-	// 重置前后指针
     QUEUE_INIT(q);  /* Signal uv_cancel() that the work req is executing. */
 
     is_slow_work = 0;
-
-	/*
-	如果当前节点等于慢 IO 节点，上面的 while 只判断了是不是只有慢 io 任务且达到
-	阈值，这里是任务队列里肯定有非慢 io 任务，可能有慢 io，如果有慢 io 并且正在
-	执行的个数达到阈值，则先不处理该慢 io 任务，继续判断是否还有非慢 io 任务可
-	执行。
-	*/
-	
     if (q == &run_slow_work_message) {
       /* If we're at the slow I/O threshold, re-schedule until after all
          other work in the queue is done. */
-
-	  // 遇到阈值，重新入队
       if (slow_io_work_running >= slow_work_thread_threshold()) {
         QUEUE_INSERT_TAIL(&wq, q);
         continue;
@@ -152,7 +132,6 @@ static void worker(void* arg) {
 
 	// 获取loop的互斥锁wq_mutex
     uv_mutex_lock(&w->loop->wq_mutex);
-	// 置空说明指向完了，不能被取消了，见 cancel 逻辑
     w->work = NULL;  /* Signal uv_cancel() that the work req is done
                         executing. */
 
@@ -175,29 +154,10 @@ static void worker(void* arg) {
 
 
 static void post(QUEUE* q, enum uv__work_kind kind) {
-  // 加锁访问任务队列，因为这个队列是线程池共享的
   uv_mutex_lock(&mutex); // 获取锁
   if (kind == UV__WORK_SLOW_IO) {
-	/* 
-	插入慢 IO 对应的队列，libuv 这个版本把任务分为几种类型，
-	对于慢 io 类型的任务，libuv 是往任务队列里面插入一个特殊的节点
-	run_slow_work_message，然后用 slow_io_pending_wq 维护了一个慢 io 任务的队列，
-	当处理到 run_slow_work_message 这个节点的时候，libuv 会从 slow_io_pending_wq
-	队列里逐个取出任务节点来执行。
-	*/
-
-  
     /* Insert into a separate queue. */
     QUEUE_INSERT_TAIL(&slow_io_pending_wq, q); // 将任务添加到任务队列的最后
-
-	/*
- 	有慢 IO 任务的时候，需要给主队列 wq 插入一个消息节点 run_slow_work_message,
- 	说明有慢 IO 任务，所以如果 run_slow_work_message 是空，说明还没有插入主队列。
- 	需要进行 q = &run_slow_work_message;赋值，然后把 run_slow_work_message 插入
- 	主队列。如果 run_slow_work_message 非空，说明已经插入线程池的任务队列了。
-	解锁然后直接返回。
- 	*/
-  
     if (!QUEUE_EMPTY(&run_slow_work_message)) {
       /* Running slow I/O tasks is already scheduled => Nothing to do here.
          The worker that runs said other task will schedule this one as well. */
@@ -207,7 +167,6 @@ static void post(QUEUE* q, enum uv__work_kind kind) {
     q = &run_slow_work_message;
   }
 
-  // 把节点插入主队列，可能是慢 IO 消息节点或者一般任务
   QUEUE_INSERT_TAIL(&wq, q);
   if (idle_threads > 0) // 如果线程池中有挂起的线程，就唤起挂起的线程，让其工作
     uv_cond_signal(&cond);
@@ -335,18 +294,10 @@ void uv__work_submit(uv_loop_t* loop,
 static int uv__work_cancel(uv_loop_t* loop, uv_req_t* req, struct uv__work* w) {
   int cancelled;
 
-  // 加锁，为了把节点移出队列
   uv_mutex_lock(&mutex);
-  // 加锁，为了判断 w->wq 是否为空
   uv_mutex_lock(&w->loop->wq_mutex);
 
-  /*
-  w 在在任务队列中并且任务函数 work 不为空，则可取消，
-  在 work 函数中，如果执行完了任务，会把 work 置 NULL，
-  所以一个任务可以取消的前提是他还没执行完。或者说还没执行过
-  */
   cancelled = !QUEUE_EMPTY(&w->wq) && w->work != NULL;
-  // 从任务队列中删除该节点
   if (cancelled)
     QUEUE_REMOVE(&w->wq);
 
@@ -356,16 +307,9 @@ static int uv__work_cancel(uv_loop_t* loop, uv_req_t* req, struct uv__work* w) {
   if (!cancelled)
     return UV_EBUSY;
 
-  // 重置回调函数
   w->work = uv__cancelled;
-  /*
-  插入 loop 的 wq 队列，对于取消的动作，libuv 认为是任务执行完了。
-  所以插入已完成的队列，不过他的回调是 uv__cancelled 函数，
-  而不是用户设置的回调
-  */
   uv_mutex_lock(&loop->wq_mutex);
   QUEUE_INSERT_TAIL(&loop->wq, &w->wq);
-  // 通知主线程有任务完成
   uv_async_send(&loop->wq_async);
   uv_mutex_unlock(&loop->wq_mutex);
 
@@ -380,23 +324,17 @@ void uv__work_done(uv_async_t* handle) {
   QUEUE wq;
   int err;
 
-  // 通过结构体字段获得结构体首地址
   loop = container_of(handle, uv_loop_t, wq_async);
-  // 准备处理队列，加锁
   uv_mutex_lock(&loop->wq_mutex);
-  // 把 loop->wq 队列的节点全部移到 wp 变量中，这样一来可以尽快释放锁
   QUEUE_MOVE(&loop->wq, &wq);
-  // 不需要使用了，解锁
   uv_mutex_unlock(&loop->wq_mutex);
 
-  // wq 队列的节点来源是在线程的 worker 里插入
   while (!QUEUE_EMPTY(&wq)) {
     q = QUEUE_HEAD(&wq);
     QUEUE_REMOVE(q);
 
     w = container_of(q, struct uv__work, wq);
     err = (w->work == uv__cancelled) ? UV_ECANCELED : 0;
-	// 执行回调
     w->done(w, err);
   }
 }

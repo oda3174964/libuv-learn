@@ -77,53 +77,42 @@ int uv_fs_poll_start(uv_fs_poll_t* handle,
 
   loop = handle->loop;
   len = strlen(path);
-  // 分配一块内存存上下文结构体和 path 对应的字符串
   ctx = uv__calloc(1, sizeof(*ctx) + len);
 
   if (ctx == NULL)
     return UV_ENOMEM;
 
-  // 初始化上下文结构
   ctx->loop = loop;
-  // 内容改变时的回调
   ctx->poll_cb = cb;
-  // 多久检测一次内容是否变化
   ctx->interval = interval ? interval : 1;
-  // 开始的时间点
   ctx->start_time = uv_now(loop);
-  // 上下文对应的 handle 结构
   ctx->parent_handle = handle;
   memcpy(ctx->path, path, len + 1);
 
-  // 初始化一个定时器
   err = uv_timer_init(loop, &ctx->timer_handle);
   if (err < 0)
     goto error;
-  // 设置 UV_HANDLE_INTERNAL 标记位
+
   ctx->timer_handle.flags |= UV_HANDLE_INTERNAL;
-  //清除 UV_HANDLE_REF 标记
   uv__handle_unref(&ctx->timer_handle);
-  // 异步获取 path 对应的文件的信息，获取到后执行 poll_cb
+
   err = uv_fs_stat(loop, &ctx->fs_req, ctx->path, poll_cb);
   if (err < 0)
     goto error;
 
-  // 挂载上下文到 handle
   if (handle->poll_ctx != NULL)
     ctx->previous = handle->poll_ctx;
   handle->poll_ctx = ctx;
-  // 激活该 handle，但不增加 handle 的 active 数
   uv__handle_start(handle);
 
   return 0;
 
 error:
-  // 出错则释放分配的内存
   uv__free(ctx);
   return err;
 }
 
-// 停止 poll
+
 int uv_fs_poll_stop(uv_fs_poll_t* handle) {
   struct poll_ctx* ctx;
 
@@ -137,7 +126,6 @@ int uv_fs_poll_stop(uv_fs_poll_t* handle) {
   /* Close the timer if it's active. If it's inactive, there's a stat request
    * in progress and poll_cb will take care of the cleanup.
    */
-  // 停止定时器，设置回调为 time_close_cb，设置状态为 closing
   if (uv_is_active((uv_handle_t*)&ctx->timer_handle))
     uv_close((uv_handle_t*)&ctx->timer_handle, timer_close_cb);
 
@@ -146,7 +134,7 @@ int uv_fs_poll_stop(uv_fs_poll_t* handle) {
   return 0;
 }
 
-// 获取 path
+
 int uv_fs_poll_getpath(uv_fs_poll_t* handle, char* buffer, size_t* size) {
   struct poll_ctx* ctx;
   size_t required_len;
@@ -180,7 +168,7 @@ void uv__fs_poll_close(uv_fs_poll_t* handle) {
     uv__make_close_pending((uv_handle_t*)handle);
 }
 
-// 定时器到期执行的回调
+
 static void timer_cb(uv_timer_t* timer) {
   struct poll_ctx* ctx;
 
@@ -189,12 +177,11 @@ static void timer_cb(uv_timer_t* timer) {
   assert(ctx->parent_handle->poll_ctx == ctx);
   ctx->start_time = uv_now(ctx->loop);
 
-  // 再次获取 stat 信息
   if (uv_fs_stat(ctx->loop, &ctx->fs_req, ctx->path, poll_cb))
     abort();
 }
 
-// 获取到 stat 后执行的回调
+
 static void poll_cb(uv_fs_t* req) {
   uv_stat_t* statbuf;
   struct poll_ctx* ctx;
@@ -220,8 +207,6 @@ static void poll_cb(uv_fs_t* req) {
 
   statbuf = &req->statbuf;
 
-  // 第一次不执行回调，因为没有可对比的 stat，第二次及后续的操作才可能执行回
-  //调，因为第一次执行的时候置 busy_polling=1
   if (ctx->busy_polling != 0)
     if (ctx->busy_polling < 0 || !statbuf_eq(&ctx->statbuf, statbuf))
       ctx->poll_cb(ctx->parent_handle, 0, &ctx->statbuf, statbuf);
@@ -237,18 +222,6 @@ out:
     return;
   }
 
-  /*
- 假设在开始时间点为 1，interval 为 10 的情况下执行了 stat，stat 完成执行并执
- 行 poll_cb 回调的时间点是 3，那么定时器的超时时间则为 10-3=7，即 7 个单位
- 后就要触发超时，而不是 10，是因为 stat 阻塞消耗了 3 个单位的时间，所以下次
- 执行超时回调函数时说明从 start 时间点开始算，已经经历了 x 单位各 interval，
-
- 然后超时回调里又执行了 stat 函数，再到执行 stat 回调，这个时间点即
- now=start+x 单位个 interval+stat 消耗的时间。得出 now-start
- 为 interval 的 x 倍+stat 消耗，即对 interval 取余可得到 stat 消耗，所以
- 当前轮，定时器的超时时间为 interval - ((now-start) % interval)
- */
-
   /* Reschedule timer, subtract the delay from doing the stat(). */
   interval = ctx->interval;
   interval -= (uv_now(ctx->loop) - ctx->start_time) % interval;
@@ -257,7 +230,7 @@ out:
     abort();
 }
 
-// 释放上下文结构体的内存
+
 static void timer_close_cb(uv_handle_t* timer) {
   struct poll_ctx* ctx;
   struct poll_ctx* it;

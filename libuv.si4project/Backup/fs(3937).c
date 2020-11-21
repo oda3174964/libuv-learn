@@ -1647,7 +1647,6 @@ static void uv__fs_done(struct uv__work* w, int status) {
   req = container_of(w, uv_fs_t, work_req);
   uv__req_unregister(req->loop, req);
 
-  // 取消了
   if (status == UV_ECANCELED) {
     assert(req->result == 0);
     req->result = UV_ECANCELED;

@@ -70,7 +70,6 @@ static void uv__signal_global_init(void) {
      * it the handler functions will be called multiple times. Thus
      * we only want to do it once.
      */
-    // 注册 fork 之后，在子进程执行的函数
     if (pthread_atfork(NULL, NULL, &uv__signal_global_reinit))
       abort();
 
@@ -99,14 +98,11 @@ void uv__signal_cleanup(void) {
 
 
 static void uv__signal_global_reinit(void) {
-  // 清除原来的（如果有的话）
   uv__signal_cleanup();
 
-  // 新建一个管道用于互斥控制
   if (uv__make_pipe(uv__signal_lock_pipefd, 0))
     abort();
 
-  // 先往管道写入数据，即解锁。后续才能顺利 lock，unlock 配对使用
   if (uv__signal_unlock())
     abort();
 }
@@ -183,18 +179,13 @@ static uv_signal_t* uv__signal_first_handle(int signum) {
   return NULL;
 }
 
-/*
-信号处理函数，signum 为收到的信号，
-每个子进程收到信号的时候都由该函数处理，
-然后通过管道通知 libuv
-*/
+
 static void uv__signal_handler(int signum) {
   uv__signal_msg_t msg;
   uv_signal_t* handle;
   int saved_errno;
 
   saved_errno = errno;
-  // 保持上一个系统调用的错误码
   memset(&msg, 0, sizeof msg);
 
   if (uv__signal_lock()) {
@@ -214,14 +205,13 @@ static void uv__signal_handler(int signum) {
      * should be written at once. In theory the pipe could become full, in
      * which case the user is out of luck.
      */
-    // 通知 libuv，哪些 handle 需要处理该信号，在 poll io 阶段处理
     do {
       r = write(handle->loop->signal_pipefd[1], &msg, sizeof msg);
     } while (r == -1 && errno == EINTR);
 
     assert(r == sizeof msg ||
            (r == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)));
-    // 该 handle 收到信号的次数
+
     if (r != -1)
       handle->caught_signals++;
   }
@@ -230,25 +220,21 @@ static void uv__signal_handler(int signum) {
   errno = saved_errno;
 }
 
-// 给当前进程注册信号处理函数，会覆盖之前设置的 signum 对应的处理函数
+
 static int uv__signal_register_handler(int signum, int oneshot) {
   /* When this function is called, the signal lock must be held. */
   struct sigaction sa;
 
   /* XXX use a separate signal stack? */
   memset(&sa, 0, sizeof(sa));
-  // 全置一，说明收到 signum 信号的时候，暂时屏蔽其他信号
   if (sigfillset(&sa.sa_mask))
     abort();
-  // 所有信号都由该函数处理
   sa.sa_handler = uv__signal_handler;
   sa.sa_flags = SA_RESTART;
-  // 设置了 oneshot，说明信号处理函数只执行一次，然后被恢复为系统的默认处理函数
   if (oneshot)
     sa.sa_flags |= SA_RESETHAND;
 
   /* XXX save old action so we can restore it later on? */
-  // 注册
   if (sigaction(signum, &sa, NULL))
     return UV__ERR(errno);
 
@@ -279,24 +265,13 @@ static int uv__signal_loop_once_init(uv_loop_t* loop) {
   if (loop->signal_pipefd[0] != -1)
     return 0;
 
-  // 申请一个管道，用于其他进程和 libuv 主进程通信，并设置非阻塞标记
   err = uv__make_pipe(loop->signal_pipefd, UV__F_NONBLOCK);
   if (err)
     return err;
 
-  /*
-  设置信号 io 观察者的处理函数和文件描述符，
-  libuv 在 poll io 时，发现管道读端 loop->signal_pipefd[0]可读，
-  则执行 uv__signal_event
-  */
   uv__io_init(&loop->signal_io_watcher,
               uv__signal_event,
               loop->signal_pipefd[0]);
-
-  /*
-  插入 libuv 的 io 观察者队列，并注册感兴趣的事件，即可读的时候，
-  执行 uv__signal_event
-  */
   uv__io_start(loop, &loop->signal_io_watcher, POLLIN);
 
   return 0;
@@ -344,7 +319,6 @@ void uv__signal_loop_cleanup(uv_loop_t* loop) {
 int uv_signal_init(uv_loop_t* loop, uv_signal_t* handle) {
   int err;
 
-  // 申请和 libuv 的通信管道并且注册 io 观察者
   err = uv__signal_loop_once_init(loop);
   if (err)
     return err;
@@ -406,31 +380,16 @@ static int uv__signal_start(uv_signal_t* handle,
   if (handle->signum != 0) {
     uv__signal_stop(handle);
   }
-  // 屏蔽所有信号
+
   uv__signal_block_and_lock(&saved_sigmask);
 
   /* If at this point there are no active signal watchers for this signum (in
    * any of the loops), it's time to try and register a handler for it here.
    * Also in case there's only one-shot handlers and a regular handler comes in.
    */
-  /*
-	注册了该信号的第一个 handle，
-	优先返回设置了 UV_SIGNAL_ONE_SHOT flag 的，
-	见 compare 函数
-  */
   first_handle = uv__signal_first_handle(signum);
-  /* 
-  1 之前没有注册过该信号的处理函数则直接设置
-  2 之前设置过，但是是 one shot，但是现在需要
-  设置的规则不是 one shot，需要修改。否则第
-  二次不会不会触发。因为一个信号只能对应一
-  个信号处理函数，所以，以规则宽的为准备，在回调
-  里再根据 flags 判断是不是真的需要执行
-  3 如果注册过信号和处理函数，则直接插入红黑树就行。
-  */
   if (first_handle == NULL ||
       (!oneshot && (first_handle->flags & UV_SIGNAL_ONE_SHOT))) {
-    // 注册信号和处理函数
     err = uv__signal_register_handler(signum, oneshot);
     if (err) {
       /* Registering the signal handler failed. Must be an invalid signal. */
@@ -438,23 +397,22 @@ static int uv__signal_start(uv_signal_t* handle,
       return err;
     }
   }
-  // 记录感兴趣的信号
+
   handle->signum = signum;
-  // 只处理一次该信号
   if (oneshot)
     handle->flags |= UV_SIGNAL_ONE_SHOT;
-  // 插入红黑树
+
   RB_INSERT(uv__signal_tree_s, &uv__signal_tree, handle);
 
   uv__signal_unlock_and_unblock(&saved_sigmask);
-  // 信号触发时的业务层回调
+
   handle->signal_cb = signal_cb;
   uv__handle_start(handle);
 
   return 0;
 }
 
-// 如果收到信号,libuv poll io 阶段,会执行该函数
+
 static void uv__signal_event(uv_loop_t* loop,
                              uv__io_t* w,
                              unsigned int events) {
@@ -468,7 +426,6 @@ static void uv__signal_event(uv_loop_t* loop,
   end = 0;
 
   do {
-  	// 独处所有的 uv__signal_msg_t
     r = read(loop->signal_pipefd[0], buf + bytes, sizeof(buf) - bytes);
 
     if (r == -1 && errno == EINTR)
@@ -499,18 +456,15 @@ static void uv__signal_event(uv_loop_t* loop,
       msg = (uv__signal_msg_t*) (buf + i);
       handle = msg->handle;
 
-      // 收到的信号和 handle 感兴趣的信号一致，执行回调
       if (msg->signum == handle->signum) {
         assert(!(handle->flags & UV_HANDLE_CLOSING));
         handle->signal_cb(handle, handle->signum);
       }
 
-	  // 处理信号个数
       handle->dispatched_signals++;
 
-      // 只执行一次，恢复系统默认的处理函数
       if (handle->flags & UV_SIGNAL_ONE_SHOT)
-        uv__signal_stop(handle);  // 处理完了关闭
+        uv__signal_stop(handle);
     }
 
     bytes -= end;

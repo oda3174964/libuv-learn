@@ -422,7 +422,7 @@ int uv__stream_open(uv_stream_t* stream, int fd, int flags) {
       return UV__ERR(errno);
 
     /* TODO Use delay the user passed in. */
-	// 开启SO_KEEPALIVE，使用tcp长连接，一定时间后没有收到数据包会发送心跳包
+	/ 开启SO_KEEPALIVE，使用tcp长连接，一定时间后没有收到数据包会发送心跳包
     if ((stream->flags & UV_HANDLE_TCP_KEEPALIVE) &&
         uv__tcp_keepalive(fd, 1, 60)) {
       return UV__ERR(errno);
@@ -534,13 +534,11 @@ void uv__server_io(uv_loop_t* loop, uv__io_t* w, unsigned int events) {
   uv_stream_t* stream;
   int err;
 
-  // 拿到 io 观察者所在的流
   stream = container_of(w, uv_stream_t, io_watcher);
   assert(events & POLLIN);
   assert(stream->accepted_fd == -1);
   assert(!(stream->flags & UV_HANDLE_CLOSING));
 
-  // 继续注册事件,等待连接
   uv__io_start(stream->loop, &stream->io_watcher, POLLIN);
 
   /* connection_cb can close the server socket while we're
@@ -554,7 +552,6 @@ void uv__server_io(uv_loop_t* loop, uv__io_t* w, unsigned int events) {
       return;
 #endif /* defined(UV_HAVE_KQUEUE) */
 
-    // 有连接到来，进行 accept
     err = uv__accept(uv__stream_fd(stream));
     if (err < 0) {
       if (err == UV_EAGAIN || err == UV__ERR(EWOULDBLOCK))
@@ -568,15 +565,13 @@ void uv__server_io(uv_loop_t* loop, uv__io_t* w, unsigned int events) {
         if (err == UV_EAGAIN || err == UV__ERR(EWOULDBLOCK))
           break;
       }
-      // accept 出错，触发回调
+
       stream->connection_cb(stream, err);
       continue;
     }
 
     UV_DEC_BACKLOG(w)
-    // 保存通信 socket 对应的文件描述符
     stream->accepted_fd = err;
-	// 有连接，执行上层回调，connection_cb 一般会调用 uv_accept 消费 accepted_fd
     stream->connection_cb(stream, 0);
 
     if (stream->accepted_fd != -1) {
@@ -584,7 +579,7 @@ void uv__server_io(uv_loop_t* loop, uv__io_t* w, unsigned int events) {
       uv__io_stop(loop, &stream->io_watcher, POLLIN);
       return;
     }
-    // 定时睡眠一会（可被信号唤醒），分点给别的进程 accept
+
     if (stream->type == UV_TCP &&
         (stream->flags & UV_HANDLE_TCP_SINGLE_ACCEPT)) {
       /* Give other processes a chance to accept connections. */
@@ -1439,6 +1434,7 @@ int uv_write2(uv_write_t* req,
   if (uv__stream_fd(stream) < 0)
     return UV_EBADF;
 
+  // 流中缓存的数据大小是否为0
   if (!(stream->flags & UV_HANDLE_WRITABLE))
     return UV_EPIPE;
 
@@ -1493,7 +1489,7 @@ int uv_write2(uv_write_t* req,
   if (req->bufs == NULL)
     return UV_ENOMEM;
 
-  // 把需要写入的数据填充到req中
+	// 把需要写入的数据填充到req中
   memcpy(req->bufs, bufs, nbufs * sizeof(bufs[0]));
   // 需要写入的buf个数
   req->nbufs = nbufs;

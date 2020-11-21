@@ -202,14 +202,12 @@ int uv__signal_start(uv_signal_t* handle,
    * through the process of deregistering and registering the handler.
    * Additionally, this avoids pending signals getting lost in the (small) time
    * frame that handle->signum == 0. */
-   // 注册过了，重新设置处理函数就行
   if (signum == handle->signum) {
     handle->signal_cb = signal_cb;
     return 0;
   }
 
   /* If the signal handler was already active, stop it first. */
-  // 这个 handle 之前已经设置了信号和处理函数，则先解除
   if (handle->signum != 0) {
     int r = uv_signal_stop(handle);
     /* uv_signal_stop is infallible. */
